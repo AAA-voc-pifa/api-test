@@ -61,6 +61,19 @@ export async function requestJson(
   return body
 }
 
+export async function requestOk(
+  url: string,
+  headerName: PasswordHeader,
+  password: string,
+  init?: RequestInit,
+): Promise<void> {
+  const res = await send(url, headerName, password, init)
+  if (res.status === 204) return
+  const body = await readBody(res)
+  if (!res.ok) throw new Error(explainFailure(res.status, body))
+  if (isRecord(body) && body.ok === false) throw new Error(explainFailure(res.status, body))
+}
+
 export async function requestAudio(
   url: string,
   headerName: PasswordHeader,

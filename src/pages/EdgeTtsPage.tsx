@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { apiUrl, isRecord, requestAudio, requestJson } from '../api'
+import { apiUrl, isRecord, requestAudio, requestJson, requestOk } from '../api'
 import { ServiceFrame } from '../ServiceFrame'
 
 type Voice = {
@@ -10,6 +10,8 @@ type Voice = {
   language: string
   status: string
 }
+
+const RATE_PATTERN = /^[+-]\d+%$/
 
 function readVoices(body: unknown): Voice[] {
   if (!Array.isArray(body)) throw new Error('返回格式无法识别')
@@ -39,6 +41,7 @@ function EdgeTtsConsole({ password, base }: { password: string; base: string }) 
   const [query, setQuery] = useState('')
   const [voice, setVoice] = useState('en-US-AriaNeural')
   const [text, setText] = useState('Hello, this is a speech test.')
+  const [rate, setRate] = useState('+0%')
   const [busy, setBusy] = useState<'voices' | 'tts' | null>(null)
   const [voiceError, setVoiceError] = useState<string | null>(null)
   const [ttsError, setTtsError] = useState<string | null>(null)
@@ -73,7 +76,11 @@ function EdgeTtsConsole({ password, base }: { password: string; base: string }) 
     setBusy('voices')
     setVoiceError(null)
     try {
-      const body = await requestJson(apiUrl(base, 'voice').toString(), 'password', password)
+      const url = apiUrl(base, 'voice')
+      const localeValue = locale.trim()
+      if (localeValue) url.searchParams.set('Locale', localeValue)
+      if (gender) url.searchParams.set('Gender', gender)
+      const body = await requestJson(url.toString(), 'password', password)
       setVoices(readVoices(body))
     } catch (error) {
       setVoiceError(errorText(error))
@@ -86,8 +93,13 @@ function EdgeTtsConsole({ password, base }: { password: string; base: string }) 
     event.preventDefault()
     const spoken = text.trim()
     const selected = voice.trim()
+    const rateValue = rate.trim() || '+0%'
     if (!spoken || !selected) {
       setTtsError('请填写 text 和 voice')
+      return
+    }
+    if (!RATE_PATTERN.test(rateValue)) {
+      setTtsError('语速格式如 +0%、+50%、-20%')
       return
     }
     setBusy('tts')
@@ -96,6 +108,7 @@ function EdgeTtsConsole({ password, base }: { password: string; base: string }) 
       const url = apiUrl(base, 'tts')
       url.searchParams.set('text', spoken)
       url.searchParams.set('voice', selected)
+      url.searchParams.set('rate', rateValue)
       const blob = await requestAudio(url.toString(), 'password', password)
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
       const nextUrl = URL.createObjectURL(blob)
@@ -142,7 +155,7 @@ function EdgeTtsConsole({ password, base }: { password: string; base: string }) 
             />
           </label>
           <button className="primary" type="button" disabled={busy !== null} onClick={() => void onLoadVoices()}>
-            {busy === 'voices' ? '获取中…' : '获取全部语音'}
+            {busy === 'voices' ? '获取中…' : '获取语音'}
           </button>
         </div>
         {voiceError ? (
@@ -214,6 +227,15 @@ function EdgeTtsConsole({ password, base }: { password: string; base: string }) 
             </datalist>
           </label>
           <label className="field">
+            rate
+            <input
+              value={rate}
+              placeholder="+0%"
+              spellCheck={false}
+              onChange={(event) => setRate(event.target.value)}
+            />
+          </label>
+          <label className="field">
             text
             <textarea value={text} onChange={(event) => setText(event.target.value)} required />
           </label>
@@ -241,7 +263,14 @@ function EdgeTtsConsole({ password, base }: { password: string; base: string }) 
 
 export function EdgeTtsPage() {
   return (
-    <ServiceFrame service="edge-tts" title="Edge TTS" placeholder="https://edge-tts.fastapicloud.dev/">
+    <ServiceFrame
+      service="edge-tts"
+      title="Edge TTS"
+      placeholder="https://edge-tts.fastapicloud.dev/"
+      verify={async ({ prefix, password }) => {
+        await requestOk(apiUrl(prefix, 'auth').toString(), 'password', password)
+      }}
+    >
       {({ prefix, password }) => <EdgeTtsConsole password={password} base={prefix} />}
     </ServiceFrame>
   )

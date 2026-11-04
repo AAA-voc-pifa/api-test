@@ -6,11 +6,13 @@ export function ServiceFrame({
   service,
   title,
   placeholder,
+  verify,
   children,
 }: {
   service: ServiceId
   title: string
   placeholder: string
+  verify?: (config: { prefix: string; password: string }) => Promise<void>
   children: (config: { prefix: string; password: string }) => ReactNode
 }) {
   const [prefix, setPrefix] = useState(() => readPrefix(service))
@@ -19,6 +21,7 @@ export function ServiceFrame({
   const [prefixDraft, setPrefixDraft] = useState(() => readPrefix(service))
   const [passwordDraft, setPasswordDraft] = useState(readPassword)
   const [visible, setVisible] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   function openSettings() {
@@ -29,7 +32,7 @@ export function ServiceFrame({
     setEditing(true)
   }
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const nextPrefix = prefixDraft.trim()
     const nextPassword = passwordDraft.trim()
@@ -37,16 +40,26 @@ export function ServiceFrame({
       setError('请填写前缀和 password')
       return
     }
+    let normalized: string
     try {
-      const normalized = normalizePrefix(nextPrefix)
+      normalized = normalizePrefix(nextPrefix)
+    } catch {
+      setError('前缀需要是 http 或 https 地址')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      if (verify) await verify({ prefix: normalized, password: nextPassword })
       savePrefix(service, normalized)
       savePassword(nextPassword)
       setPrefix(normalized)
       setPassword(nextPassword)
       setEditing(false)
-      setError(null)
-    } catch {
-      setError('前缀需要是 http 或 https 地址')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '验证失败')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -62,7 +75,7 @@ export function ServiceFrame({
         </button>
       </header>
       {editing ? (
-        <form className="gate" onSubmit={onSubmit}>
+        <form className="gate" onSubmit={(event) => void onSubmit(event)}>
           <label>
             前缀
             <input
@@ -96,8 +109,8 @@ export function ServiceFrame({
             />
           </label>
           <div className="actions">
-            <button className="primary" type="submit">
-              保存
+            <button className="primary" type="submit" disabled={busy}>
+              {busy ? '验证中…' : '保存'}
             </button>
             <button className="ghost" type="button" onClick={() => setVisible((value) => !value)}>
               {visible ? '隐藏' : '显示'}
@@ -106,6 +119,7 @@ export function ServiceFrame({
               <button
                 className="ghost"
                 type="button"
+                disabled={busy}
                 onClick={() => {
                   setEditing(false)
                   setError(null)

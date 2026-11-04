@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { apiUrl, isRecord, requestJson } from '../api'
+import { apiUrl, isRecord, requestJson, requestOk } from '../api'
 import { ServiceFrame } from '../ServiceFrame'
 
 type VocWord = {
@@ -9,7 +9,7 @@ type VocWord = {
   updateAt: string
 }
 
-type ListMode = { type: 'all' } | { type: 'lowest'; count: number }
+type ListMode = { type: 'all' } | { type: 'lowest'; count: number; points: number }
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : '请求失败'
@@ -21,18 +21,21 @@ function formatTime(iso: string): string {
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
+function readWord(item: unknown): VocWord | null {
+  if (!isRecord(item) || typeof item.word !== 'string') return null
+  return {
+    word: item.word,
+    points: typeof item.points === 'number' ? item.points : 0,
+    addAt: typeof item.add_at === 'string' ? item.add_at : '',
+    updateAt: typeof item.update_at === 'string' ? item.update_at : '',
+  }
+}
+
 function readWords(body: unknown): VocWord[] {
   if (!isRecord(body) || !Array.isArray(body.data)) throw new Error('返回格式无法识别')
   return body.data.flatMap((item) => {
-    if (!isRecord(item) || typeof item.word !== 'string') return []
-    return [
-      {
-        word: item.word,
-        points: typeof item.points === 'number' ? item.points : 0,
-        addAt: typeof item.add_at === 'string' ? item.add_at : '',
-        updateAt: typeof item.update_at === 'string' ? item.update_at : '',
-      },
-    ]
+    const word = readWord(item)
+    return word ? [word] : []
   })
 }
 
@@ -42,6 +45,7 @@ function wordUrl(base: string, word: string): string {
 
 function VocConsole({ password, base }: { password: string; base: string }) {
   const [countText, setCountText] = useState('20')
+  const [addPointsText, setAddPointsText] = useState('1')
   const [word, setWord] = useState('')
   const [pointsText, setPointsText] = useState('0')
   const [words, setWords] = useState<VocWord[]>([])
@@ -52,7 +56,10 @@ function VocConsole({ password, base }: { password: string; base: string }) {
 
   async function fetchWords(mode: ListMode): Promise<VocWord[]> {
     const url = apiUrl(base, mode.type === 'all' ? 'voc/all' : 'voc')
-    if (mode.type === 'lowest') url.searchParams.set('count', String(mode.count))
+    if (mode.type === 'lowest') {
+      url.searchParams.set('count', String(mode.count))
+      url.searchParams.set('points', String(mode.points))
+    }
     const body = await requestJson(url.toString(), 'Authentication', password)
     return readWords(body)
   }
@@ -77,11 +84,15 @@ function VocConsole({ password, base }: { password: string; base: string }) {
       setListError('count 需要是 1 到 10000 的整数')
       return
     }
-    void loadList({ type: 'lowest', count }, 'lowest')
+    if (addPointsText.trim() === '' || !Number.isInteger(Number(addPointsText))) {
+      setListError('points 需要是整数')
+      return
+    }
+    void loadList({ type: 'lowest', count, points: Number(addPointsText) }, 'lowest')
   }
 
   async function reload() {
-    if (!listMode) return
+    if (!listMode || listMode.type === 'lowest') return
     try {
       setWords(await fetchWords(listMode))
       setListError(null)
@@ -129,6 +140,23 @@ function VocConsole({ password, base }: { password: string; base: string }) {
       )
       const exists = isRecord(body) && body.data === true
       return exists ? `「${next}」在词库中` : `「${next}」不在词库中`
+    })
+  }
+
+  function onDetail() {
+    void runAction('detail', async () => {
+      const next = requireWord()
+      const body = await requestJson(
+        apiUrl(base, `voc/detail/${encodeURIComponent(next)}`).toString(),
+        'Authentication',
+        password,
+      )
+      if (!isRecord(body)) throw new Error('返回格式无法识别')
+      const item = readWord(body.data)
+      if (!item) throw new Error('返回格式无法识别')
+      setWord(item.word)
+      setPointsText(String(item.points))
+      return `「${item.word}」 ${item.points} 分 · 添加 ${formatTime(item.addAt)} · 更新 ${formatTime(item.updateAt)}`
     })
   }
 
@@ -181,6 +209,16 @@ function VocConsole({ password, base }: { password: string; base: string }) {
               required
             />
           </label>
+          <label className="field">
+            points
+            <input
+              type="number"
+              step={1}
+              value={addPointsText}
+              onChange={(event) => setAddPointsText(event.target.value)}
+              required
+            />
+          </label>
           <button className="primary" type="submit" disabled={busy !== null}>
             {busy === 'lowest' ? '获取中…' : '分数最低'}
           </button>
@@ -189,7 +227,7 @@ function VocConsole({ password, base }: { password: string; base: string }) {
           </button>
         </form>
         <p className="meta">
-          <code>GET /voc?count=</code>
+          <code>GET /voc</code>
           <code>GET /voc/all</code>
         </p>
         {listError ? (
@@ -252,6 +290,9 @@ function VocConsole({ password, base }: { password: string; base: string }) {
           <button className="ghost" type="button" disabled={busy !== null} onClick={onExist}>
             {busy === 'exist' ? '查询中…' : '是否存在'}
           </button>
+          <button className="ghost" type="button" disabled={busy !== null} onClick={onDetail}>
+            {busy === 'detail' ? '查询中…' : '详情'}
+          </button>
           <button className="danger" type="button" disabled={busy !== null} onClick={onDelete}>
             {busy === 'delete' ? '删除中…' : '删除'}
           </button>
@@ -279,6 +320,7 @@ function VocConsole({ password, base }: { password: string; base: string }) {
         <p className="meta">
           <code>POST /voc/&#123;word&#125;</code>
           <code>GET /voc/exist/&#123;word&#125;</code>
+          <code>GET /voc/detail/&#123;word&#125;</code>
           <code>DELETE /voc/&#123;word&#125;</code>
           <code>POST /voc/points/&#123;word&#125;</code>
         </p>
@@ -294,7 +336,14 @@ function VocConsole({ password, base }: { password: string; base: string }) {
 
 export function VocPage() {
   return (
-    <ServiceFrame service="voc" title="词汇" placeholder="https://voc-api.fastapicloud.dev/">
+    <ServiceFrame
+      service="voc"
+      title="词汇"
+      placeholder="https://voc-api.fastapicloud.dev/"
+      verify={async ({ prefix, password }) => {
+        await requestOk(apiUrl(prefix, 'auth').toString(), 'Authentication', password)
+      }}
+    >
       {({ prefix, password }) => <VocConsole password={password} base={prefix} />}
     </ServiceFrame>
   )
